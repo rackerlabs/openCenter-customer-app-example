@@ -3,3 +3,4 @@ kind: Kustomization
 resources:
   - "gateway-resources/"
   - "app1/"
+  - "app2"
