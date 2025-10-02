@@ -1,0 +1,24 @@
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: customer-managed-gateway
+  namespace: app1
+  annotations:
+    cert-manager.io/cluster-issuer: sample-ca-issuer
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: web-https
+      port: 443
+      protocol: HTTPS
+      hostname: app1.demo-customer.dev.dfw3.k8s.opencenter.cloud
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: app1-tls

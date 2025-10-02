@@ -1,0 +1,18 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sample-selfsigned-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: opencenter.dev
+  secretName: sample-root-secret
+  duration: 87600h0m0s
+  renewBefore: 360h0m0s
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: sample-selfsigned-issuer
+    kind: Issuer
+    group: cert-manager.io

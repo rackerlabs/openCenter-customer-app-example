@@ -1,1 +1,1 @@
-# opencenter-demo-apps
+# openCenter-customer-app-example
