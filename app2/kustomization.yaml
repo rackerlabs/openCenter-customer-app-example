@@ -5,6 +5,7 @@ resources:
   - "namespace.yaml"
   - "source.yaml"
   - "helmrelease.yaml"
+  - "httproute.yaml"
 secretGenerator:
   - name: headlamp-values-base
     type: Opaque
@@ -12,3 +13,4 @@ secretGenerator:
       - hardened.yaml=helm-values/hardened-values-0.35.0.yaml
     options:
       disableNameSuffixHash: true
+    namespace: headlamp
