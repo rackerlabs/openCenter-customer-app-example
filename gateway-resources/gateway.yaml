@@ -22,3 +22,16 @@ spec:
           - group: ""
             kind: Secret
             name: app1-tls
+    - name: headlamp-https
+      port: 443
+      protocol: HTTPS
+      hostname: headlamp.demo-customer.dev.dfw3.k8s.opencenter.cloud
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: headlamp-tls
