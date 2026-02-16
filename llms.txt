@@ -1,0 +1,687 @@
+# openCenter Customer App Example
+
+> Reference customer application deployment for openCenter platform using Kustomize overlays and FluxCD GitOps. Designed for multi-team environments where each team manages its own GitOps configuration in a shared FluxCD control plane.
+
+## Operator Guidance
+
+- Use Kustomize to compose shared gateway resources and application manifests
+- Application teams manage their own repos; platform teams configure Flux GitRepository and Kustomization manifests
+- Run `kustomize build .` locally before pushing changes (add `--enable-helm` for Helm-based apps)
+- Validate manifests with `kubeconform <(kustomize build .)` before committing
+- Use pre-commit hooks to enforce YAML linting standards
+- Never commit raw secrets; reference secrets provisioned by platform team or use External Secrets Operator
+- Force reconciliation after merging with `flux reconcile kustomization customer-app --with-source`
+- Coordinate shared gateway modifications with other teams to avoid conflicting host rules
+
+## Installation
+
+### Prerequisites
+
+Install required tooling for local development and validation.
+
+Source: openCenter-customer-app-example/README.md
+
+Install pre-commit framework for YAML linting:
+
+```bash
+# Using pip
+pip install pre-commit
+
+# Or using Homebrew
+brew install pre-commit
+
+# Register the hook in your repository
+pre-commit install
+```
+
+### Clone Repository
+
+Source: openCenter-customer-app-example/README.md
+
+Application teams clone or fork the example repository to start their deployment:
+
+```bash
+git clone https://github.com/<org>/openCenter-customer-app-example
+cd openCenter-customer-app-example
+```
+
+## Quickstart
+
+### Application Team Workflow
+
+Source: openCenter-customer-app-example/README.md
+
+Quick steps for application teams to deploy their workload using the existing FluxCD control plane.
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/<org>/openCenter-customer-app-example
+
+# 2. Modify manifests as needed (e.g., update gateway listeners)
+# Edit gateway-resources/gateway.yaml, app1/deployment.yaml, etc.
+
+# 3. Validate locally before committing
+kustomize build .
+
+# 4. Run pre-commit checks
+pre-commit run --all-files
+
+# 5. Commit and push changes
+git add .
+git commit -m "Update application configuration"
+git push origin main
+```
+
+The platform team will provide a deploy key to add to your repository settings for Flux authentication.
+
+### Platform Team Workflow
+
+Source: openCenter-customer-app-example/README.md
+
+Platform teams configure Flux to reconcile application team repositories.
+
+```bash
+# 1. Create Flux Git secret for repository access
+flux create secret git opencenter-customer-app-example \
+  --ssh-key-algorithm=ed25519 \
+  --url=ssh://git@github.com/rackerlabs/openCenter-customer-app-example.git \
+  -n flux-system
+
+# 2. Distribute the public key to application team as deploy key
+
+# 3. Create GitRepository and Kustomization manifests in cluster config repo
+# (See Configuration section for manifest examples)
+
+# 4. Commit and push to trigger Flux reconciliation
+git add clusters/<cluster>/customer-managed/<app>/
+git commit -m "Add customer application"
+git push origin main
+```
+
+## Core Concepts
+
+### Repository Structure
+
+Source: openCenter-customer-app-example/README.md
+
+The repository is organized into modular components for shared resources and individual applications.
+
+- `kustomization.yaml` — Root composition assembling gateway resources and apps
+- `gateway-resources/` — Gateway API definitions reused by all apps
+- `app1/` — Baseline workload with raw Kubernetes manifests
+- `app2/` — Optional Helm-based workload with HelmRelease
+
+### Multi-Team GitOps Model
+
+Source: openCenter-customer-app-example/README.md
+
+Application teams maintain their own repositories with deployment manifests. Platform teams configure Flux to watch these repositories and reconcile changes automatically. This separation enables teams to work independently while sharing infrastructure like gateways and ingress controllers.
+
+### Gateway API Integration
+
+Source: openCenter-customer-app-example/gateway-resources/gateway.yaml
+
+Applications use Gateway API resources (Gateway, HTTPRoute) for ingress traffic management. The Gateway resource defines listeners with TLS termination, while HTTPRoute resources in each app namespace route traffic to services.
+
+## Common Recipes
+
+### Deploy Basic Application (app1)
+
+Source: openCenter-customer-app-example/app1/
+
+Deploy a simple nginx-based application with Gateway API routing and cert-manager TLS.
+
+Root kustomization.yaml:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - "gateway-resources/"
+  - "app1/"
+  - "app2/"
+```
+
+Deployment manifest (app1/deployment.yaml):
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  labels: { app: web }
+  namespace: app1
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+```
+
+Service manifest (app1/service.yaml):
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app
+  namespace: app1
+  labels: { app: web }
+spec:
+  type: ClusterIP
+  selector: { app: web }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+```
+
+### Configure Gateway with TLS
+
+Source: openCenter-customer-app-example/gateway-resources/gateway.yaml
+
+Define a Gateway resource with HTTPS listeners and cert-manager integration for automatic certificate provisioning.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: customer-managed-gateway
+  namespace: app1
+  annotations:
+    cert-manager.io/cluster-issuer: sample-ca-issuer
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: web-https
+      port: 443
+      protocol: HTTPS
+      hostname: app1.demo-customer.dev.dfw3.k8s.opencenter.cloud
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: app1-tls
+```
+
+### Route Traffic with HTTPRoute
+
+Source: openCenter-customer-app-example/app1/httproute.yaml
+
+Create an HTTPRoute to connect the Gateway listener to your application service.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web-app
+  namespace: app1
+spec:
+  hostnames:
+    - "app1.demo-customer.dev.dfw3.k8s.opencenter.cloud"
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: customer-managed-gateway
+      namespace: app1
+      sectionName: web-https
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: web-app
+          port: 80
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+```
+
+### Deploy Helm-Based Application (app2)
+
+Source: openCenter-customer-app-example/app2/
+
+Deploy applications using Flux HelmRelease with values stored in Kubernetes secrets.
+
+HelmRepository source (app2/source.yaml):
+
+```yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: headlamp
+  namespace: headlamp
+spec:
+  url: https://kubernetes-sigs.github.io/headlamp/
+  interval: 1h
+```
+
+HelmRelease manifest (app2/helmrelease.yaml):
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: headlamp
+  namespace: headlamp
+spec:
+  releaseName: headlamp
+  interval: 5m
+  timeout: 10m
+  driftDetection:
+    mode: enabled
+  install:
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  upgrade:
+    remediation:
+      retries: 0
+      remediateLastFailure: false
+  targetNamespace: headlamp
+  chart:
+    spec:
+      chart: headlamp
+      version: 0.35.0
+      sourceRef:
+        kind: HelmRepository
+        name: headlamp
+        namespace: headlamp
+  valuesFrom:
+    - kind: Secret
+      name: headlamp-values-base
+      valuesKey: hardened.yaml
+    - kind: Secret
+      name: headlamp-values-override
+      valuesKey: override.yaml
+      optional: true
+```
+
+### Configure cert-manager Issuer
+
+Source: openCenter-customer-app-example/app1/sample-ca-issuer.yaml
+
+Set up a ClusterIssuer for automatic TLS certificate provisioning via cert-manager.
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: sample-ca-issuer
+spec:
+  ca:
+    secretName: sample-root-secret
+```
+
+## Configuration
+
+### Platform Team: GitRepository Manifest
+
+Source: openCenter-customer-app-example/README.md
+
+Create a GitRepository resource in your cluster configuration repository to point Flux at the application team's repo.
+
+```yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: customer-app
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/<org>/openCenter-customer-app-example
+  ref:
+    branch: main
+```
+
+Save as `clusters/<cluster>/customer-managed/<app>/customer-app-source.yaml`.
+
+### Platform Team: Kustomization Manifest
+
+Source: openCenter-customer-app-example/README.md
+
+Create a Kustomization resource to reconcile the application repository manifests.
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: customer-app
+  namespace: flux-system
+spec:
+  interval: 10m
+  prune: true
+  wait: true
+  path: ./
+  sourceRef:
+    kind: GitRepository
+    name: customer-app
+```
+
+Save in the same directory as the GitRepository manifest, then commit and push to trigger reconciliation.
+
+### Pre-commit Configuration
+
+Source: openCenter-customer-app-example/.pre-commit-config.yaml
+
+Configure pre-commit hooks to enforce YAML linting before commits.
+
+```yaml
+repos:
+  - repo: https://github.com/pre-commit/mirrors-yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: ["--strict"]
+```
+
+### YAML Linting Rules
+
+Source: openCenter-customer-app-example/.yamllint
+
+Define yamllint rules for consistent YAML formatting across the repository.
+
+```yaml
+extends: default
+rules:
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+  truthy:
+    allowed-values: ['true', 'false', 'on', 'off', 'yes', 'no']
+```
+
+## API Patterns
+
+### Namespace Organization
+
+Source: openCenter-customer-app-example/app1/namespace.yaml
+
+Each application should define its own namespace for resource isolation.
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app1
+```
+
+### Cross-Namespace Gateway References
+
+Source: openCenter-customer-app-example/app1/httproute.yaml, openCenter-customer-app-example/app2/httproute.yaml
+
+HTTPRoute resources can reference Gateways in different namespaces using parentRefs with explicit namespace specification.
+
+```yaml
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: customer-managed-gateway
+      namespace: app1
+      sectionName: web-https
+```
+
+The Gateway must allow cross-namespace routes:
+
+```yaml
+spec:
+  listeners:
+    - name: web-https
+      allowedRoutes:
+        namespaces:
+          from: All
+```
+
+### Helm Values from Secrets
+
+Source: openCenter-customer-app-example/app2/helmrelease.yaml
+
+HelmRelease can load values from Kubernetes secrets for sensitive configuration management.
+
+```yaml
+spec:
+  valuesFrom:
+    - kind: Secret
+      name: headlamp-values-base
+      valuesKey: hardened.yaml
+    - kind: Secret
+      name: headlamp-values-override
+      valuesKey: override.yaml
+      optional: true
+```
+
+## Troubleshooting
+
+### Validate Manifests Locally
+
+Source: openCenter-customer-app-example/README.md
+
+Use kustomize and kubeconform to catch errors before pushing to Git.
+
+```bash
+# Build and preview manifests
+kustomize build .
+
+# Build with Helm support (if app2 is enabled)
+kustomize build . --enable-helm
+
+# Validate against Kubernetes schemas
+kubeconform <(kustomize build .)
+```
+
+### Check Flux Reconciliation Status
+
+Source: openCenter-customer-app-example/README.md
+
+Monitor Flux controller logs and reconciliation status when deployments fail.
+
+```bash
+# View kustomize-controller logs
+kubectl logs -n flux-system deploy/kustomize-controller -f
+
+# Force reconciliation after changes
+flux reconcile kustomization customer-app --with-source
+
+# Preview changes before committing
+flux diff kustomization customer-app --path=./
+```
+
+### Debug Gateway Configuration
+
+Source: openCenter-customer-app-example/README.md
+
+Coordinate with other teams when modifying shared gateway resources to avoid conflicts.
+
+- Check for conflicting hostname rules across HTTPRoute resources
+- Verify Gateway listener sectionName matches in HTTPRoute parentRefs
+- Ensure cert-manager annotations reference valid ClusterIssuer resources
+- Confirm TLS secret names match between Gateway and cert-manager
+
+### Pre-commit Hook Failures
+
+Source: openCenter-customer-app-example/README.md
+
+Run pre-commit checks manually to identify and fix YAML formatting issues.
+
+```bash
+# Run all pre-commit hooks on all files
+pre-commit run --all-files
+
+# Run yamllint directly with strict mode
+yamllint --strict .
+```
+
+Common issues include indentation errors, line length violations, and truthy value formatting.
+
+## Security Notes
+
+### Secret Management
+
+Source: openCenter-customer-app-example/README.md
+
+Never commit raw secrets to Git repositories. Use platform-provided secret management solutions.
+
+- Reference secrets provisioned by the platform team
+- Integrate with External Secrets Operator for external secret stores
+- Use Sealed Secrets for encrypted secrets in Git
+- Update manifest references (`spec.secretName`, `valuesFrom`) to match cluster secrets
+
+### Deploy Key Authentication
+
+Source: openCenter-customer-app-example/README.md
+
+Flux authenticates to application repositories using SSH deploy keys with restricted permissions.
+
+```bash
+# Platform team creates Flux Git secret
+flux create secret git opencenter-customer-app-example \
+  --ssh-key-algorithm=ed25519 \
+  --url=ssh://git@github.com/rackerlabs/openCenter-customer-app-example.git \
+  -n flux-system
+```
+
+The generated public key should be added as a read-only deploy key in the application repository settings.
+
+### TLS Certificate Management
+
+Source: openCenter-customer-app-example/gateway-resources/gateway.yaml, openCenter-customer-app-example/app1/sample-ca-issuer.yaml
+
+Use cert-manager with ClusterIssuer resources for automatic TLS certificate provisioning and rotation.
+
+- Gateway annotations trigger cert-manager certificate creation
+- Certificates are stored as Kubernetes secrets
+- ClusterIssuer references CA secrets for signing
+- Automatic renewal prevents certificate expiration
+
+## Examples
+
+### Complete app1 Structure
+
+Source: openCenter-customer-app-example/app1/
+
+A complete example of a basic application with namespace, deployment, service, HTTPRoute, and cert-manager configuration.
+
+Directory structure:
+```
+app1/
+├── deployment.yaml          # Nginx deployment with resource limits
+├── httproute.yaml          # Gateway API routing configuration
+├── kustomization.yaml      # Kustomize resource list
+├── namespace.yaml          # app1 namespace definition
+├── sample-ca-issuer.yaml   # cert-manager ClusterIssuer
+├── sample-selfsigned-ca.yaml
+├── sample-selfsigned-issuer.yaml
+└── service.yaml            # ClusterIP service
+```
+
+Kustomization (app1/kustomization.yaml):
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - httproute.yaml
+  - sample-ca-issuer.yaml
+```
+
+### Multi-Application Gateway
+
+Source: openCenter-customer-app-example/gateway-resources/gateway.yaml
+
+A single Gateway resource can serve multiple applications with different hostnames and TLS certificates.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: Gateway
+metadata:
+  name: customer-managed-gateway
+  namespace: app1
+  annotations:
+    cert-manager.io/cluster-issuer: sample-ca-issuer
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: web-https
+      port: 443
+      protocol: HTTPS
+      hostname: app1.demo-customer.dev.dfw3.k8s.opencenter.cloud
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: app1-tls
+    - name: headlamp-https
+      port: 443
+      protocol: HTTPS
+      hostname: headlamp.demo-customer.dev.dfw3.k8s.opencenter.cloud
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: headlamp-tls
+```
+
+Each application creates an HTTPRoute referencing the appropriate listener by sectionName.
+
+### Team Ownership Labeling
+
+Source: openCenter-customer-app-example/README.md
+
+Track Kustomization ownership across teams using labels for better operational visibility.
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: customer-app
+  namespace: flux-system
+  labels:
+    toolkit.fluxcd.io/team: acme
+spec:
+  interval: 10m
+  prune: true
+  wait: true
+  path: ./
+  sourceRef:
+    kind: GitRepository
+    name: customer-app
+```
+
+Query resources by team:
+```bash
+kubectl get kustomization -n flux-system -l toolkit.fluxcd.io/team=acme
+```
