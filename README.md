@@ -57,7 +57,7 @@ Use the following process when the platform Flux controllers are already running
    ```bash
    flux create secret git opencenter-customer-app-example \
      --ssh-key-algorithm=ed25519 \
-     --url=ssh://git@github.com/rackerlabs/openCenter-customer-app-example.git \
+     --url=ssh://git@github.com/opencenter-cloud/openCenter-customer-app-example.git \
      -n flux-system
    ```
    Distribute the generated public key to the application team so they can add it as a deploy key.

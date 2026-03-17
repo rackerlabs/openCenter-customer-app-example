@@ -84,7 +84,7 @@ Platform teams configure Flux to reconcile application team repositories.
 # 1. Create Flux Git secret for repository access
 flux create secret git opencenter-customer-app-example \
   --ssh-key-algorithm=ed25519 \
-  --url=ssh://git@github.com/rackerlabs/openCenter-customer-app-example.git \
+  --url=ssh://git@github.com/opencenter-cloud/openCenter-customer-app-example.git \
   -n flux-system
 
 # 2. Distribute the public key to application team as deploy key
@@ -560,7 +560,7 @@ Flux authenticates to application repositories using SSH deploy keys with restri
 # Platform team creates Flux Git secret
 flux create secret git opencenter-customer-app-example \
   --ssh-key-algorithm=ed25519 \
-  --url=ssh://git@github.com/rackerlabs/openCenter-customer-app-example.git \
+  --url=ssh://git@github.com/opencenter-cloud/openCenter-customer-app-example.git \
   -n flux-system
 ```
 
